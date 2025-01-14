@@ -1,8 +1,10 @@
 import CredentialsProvider from 'next-auth/providers/credentials';
+import KakaoProvider from 'next-auth/providers/kakao';
 import { NextAuthOptions, Session, User } from 'next-auth';
 import { JWT } from 'next-auth/jwt';
 import dayjs from 'dayjs';
 import {
+  postKaKaoLogin,
   postLogin,
   postRefreshToken,
   postRegister,
@@ -37,60 +39,108 @@ export const authOptions: NextAuthOptions = {
           placeholder: '비밀번호를 입력해주세요.',
         },
       },
-      async authorize(
-        credentials: Record<'name' | 'email' | 'password', string> | undefined,
-      ) {
-        // 기존 authorize 함수 내용 유지
+      async authorize(credentials) {
         if (!credentials) {
-          throw new Error('No credentials provided.');
+          return null;
         }
+
         const { name, email, password } = credentials;
 
-        // 회원가입
-        if (name) {
+        try {
+          // 회원가입
+          if (name) {
+            const {
+              result: token,
+              success,
+              message,
+            } = await postRegister({
+              username: name,
+              email: email,
+              password: password,
+            });
+
+            if (success && token) {
+              return {
+                id: token.id.toString(),
+                name: token.username,
+                email: token.email,
+                accessToken: token.accessToken,
+                refreshToken: token.refreshToken,
+                expiredAt: token.expiredAt,
+              };
+            } else {
+              throw new Error(message || 'Signup failed.');
+            }
+          }
+
+          // 로그인
           const {
             result: token,
             success,
             message,
-          } = await postRegister({
-            username: name,
+          } = await postLogin({
             email: email,
             password: password,
           });
 
-          if (success) {
-            return { id: '1', name, email, ...token };
+          if (success && token) {
+            return {
+              id: token.id.toString(),
+              name: token.username,
+              email: token.email,
+              accessToken: token.accessToken,
+              refreshToken: token.refreshToken,
+              expiredAt: token.expiredAt,
+            };
           } else {
-            const error = new Error('Signup failed.');
-            (error as Error).message = message;
-            throw error;
+            throw new Error(message || 'Login failed.');
           }
-        }
-
-        // 로그인
-        const {
-          result: token,
-          success,
-          message,
-        } = await postLogin({
-          email: email,
-          password: password,
-        });
-
-        if (success) {
-          return { id: '1', name, email, ...token };
-        } else {
-          const error = new Error('Login failed.');
-          (error as Error).message = message;
-          throw error;
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error('Authentication error:', error);
+          return null;
         }
       },
+    }),
+    KakaoProvider({
+      clientId: process.env.KAKAO_CLIENT_ID!,
+      clientSecret: process.env.KAKAO_CLIENT_SECRET!,
     }),
   ],
   pages: {
     signIn: '/signin',
   },
   callbacks: {
+    async signIn({ user, account }) {
+      // 카카오 로그인 서버 검증
+      if (account?.provider === 'kakao' && account.access_token) {
+        try {
+          const {
+            result: token,
+            success,
+            message,
+          } = await postKaKaoLogin({
+            accessToken: account.access_token,
+          });
+          if (success && token) {
+            user.id = token.id.toString();
+            user.name = token.username;
+            user.email = token.email;
+            user.accessToken = token.accessToken;
+            user.refreshToken = token.refreshToken;
+            user.expiredAt = token.expiredAt;
+            return true;
+          } else {
+            throw new Error(message || 'KAKAO Login failed.');
+          }
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error('Error during Kakao login:', error);
+          return false;
+        }
+      }
+      return true;
+    },
     async jwt({ token, user }: { token: JWT; user?: IMyUser }) {
       if (user) {
         token.id = Number(user.id);
